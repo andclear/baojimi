@@ -160,6 +160,14 @@ async function handleFakeStream(
     const response = await result.response;
     const fullText = response.text();
     
+    console.log(`[FAKE_STREAM] Key ${keyId} got response length: ${fullText.length} characters`);
+    
+    // 检查响应是否为空
+    if (!fullText || fullText.trim().length === 0) {
+      console.warn(`[FAKE_STREAM] Key ${keyId} returned empty response`);
+      throw new Error('Empty response from Gemini API');
+    }
+    
     // 将完整文本分块模拟流式传输
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -167,44 +175,108 @@ async function handleFakeStream(
         // 发送初始连接确认
         controller.enqueue(encoder.encode(': connected\n\n'));
         
-        // 按字符分块，而不是按词分块，这样更平滑
-        const chunkSize = 3; // 每次发送3个字符
+        // 动态计算块大小：根据文本长度调整
+        const textLength = fullText.length;
+        let baseChunkSize: number;
+        let delay: number;
+        
+        if (textLength <= 50) {
+          // 短文本：每次1-2个字符，延迟较长
+          baseChunkSize = 1;
+          delay = 50;
+        } else if (textLength <= 200) {
+          // 中等文本：每次2-4个字符
+          baseChunkSize = 2;
+          delay = 35;
+        } else if (textLength <= 500) {
+          // 较长文本：每次3-6个字符
+          baseChunkSize = 3;
+          delay = 25;
+        } else {
+          // 长文本：每次4-8个字符，延迟较短
+          baseChunkSize = 4;
+          delay = 20;
+        }
+        
+        console.log(`[FAKE_STREAM] Using base chunk size: ${baseChunkSize}, delay: ${delay}ms for text length: ${textLength}`);
+        
         let currentIndex = 0;
+        let chunkCount = 0;
         
         const sendChunk = () => {
-          if (currentIndex < fullText.length) {
-            const chunkText = fullText.slice(currentIndex, currentIndex + chunkSize);
-            currentIndex += chunkSize;
+          try {
+            if (currentIndex >= fullText.length) {
+              // 所有内容已发送完毕，发送结束标记
+              const finishChunk = {
+                id: `chatcmpl-${Date.now()}`,
+                object: 'chat.completion.chunk',
+                created: Math.floor(Date.now() / 1000),
+                model,
+                choices: [{
+                  index: 0,
+                  delta: {},
+                  finish_reason: 'stop'
+                }]
+              };
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(finishChunk)}\n\n`));
+              controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+              controller.close();
+              console.log(`[FAKE_STREAM] Key ${keyId} completed streaming ${chunkCount} chunks`);
+              return;
+            }
             
-            if (chunkText) {
+            // 动态调整块大小：在基础大小上增加随机变化，让流式更自然
+            const randomVariation = Math.floor(Math.random() * baseChunkSize) + 1;
+            const dynamicChunkSize = baseChunkSize + randomVariation;
+            
+            // 确保不会超出文本边界
+            const remainingLength = fullText.length - currentIndex;
+            const actualChunkSize = Math.min(dynamicChunkSize, remainingLength);
+            
+            const chunkText = fullText.slice(currentIndex, currentIndex + actualChunkSize);
+            currentIndex += actualChunkSize;
+            chunkCount++;
+            
+            // 只有当块文本不为空时才发送
+            if (chunkText && chunkText.length > 0) {
               const openaiChunk = convertGeminiStreamToOpenAI({ text: chunkText }, model);
               const sseData = `data: ${JSON.stringify(openaiChunk)}\n\n`;
               controller.enqueue(encoder.encode(sseData));
+              
+              // 每50个块输出一次进度日志
+              if (chunkCount % 50 === 0) {
+                console.log(`[FAKE_STREAM] Key ${keyId} sent ${chunkCount} chunks, progress: ${Math.round((currentIndex / fullText.length) * 100)}%`);
+              }
             }
             
-            // 模拟延迟，让流式效果更自然
-            setTimeout(sendChunk, 30);
-          } else {
-            // 发送结束标记
-            const finishChunk = {
-              id: `chatcmpl-${Date.now()}`,
-              object: 'chat.completion.chunk',
-              created: Math.floor(Date.now() / 1000),
-              model,
-              choices: [{
-                index: 0,
-                delta: {},
-                finish_reason: 'stop'
-              }]
-            };
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(finishChunk)}\n\n`));
-            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-            controller.close();
+            // 动态延迟：根据剩余内容调整
+            let dynamicDelay = delay;
+            const progress = currentIndex / fullText.length;
+            
+            // 开始时稍慢，中间加速，结尾稍慢
+            if (progress < 0.1) {
+              dynamicDelay = delay * 1.5; // 开始慢一点
+            } else if (progress > 0.9) {
+              dynamicDelay = delay * 1.2; // 结尾慢一点
+            } else {
+              dynamicDelay = delay * 0.8; // 中间快一点
+            }
+            
+            // 继续发送下一个块
+            setTimeout(sendChunk, dynamicDelay);
+            
+          } catch (error) {
+            console.error(`[FAKE_STREAM] Error in sendChunk for key ${keyId}:`, error);
+            controller.error(error);
           }
         };
         
         // 稍微延迟开始，模拟真实的响应时间
         setTimeout(sendChunk, 100);
+      },
+      
+      cancel() {
+        console.log(`[FAKE_STREAM] Stream cancelled for key ${keyId}`);
       }
     });
     
