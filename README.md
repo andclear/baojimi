@@ -14,7 +14,7 @@
 - 🔐 **安全防护**（几乎没有，全靠你自己保管好密码）
 - 🚀 **一键部署**（但是还要折腾数据库，麻烦）
 
-## 🛠️ 技术栈（听起来很专业）
+## 🛠️ 技术栈（听起来很专业，实际很菜）
 
 - **前端框架**：Next.js（因为它很火）
 - **样式框架**：Tailwind CSS（因为写 CSS 太累了）
@@ -23,13 +23,6 @@
 - **部署**：Vercel（一开始就冲着它免费的来的）
 - **图标**：Lucide React（能看就行）
 
-## 🚀 一键部署
-
-点击下面这个按钮，然后跟着提示走：
-
-数据库使用免费的Supabase PostgreSQL。
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fandclear%2Fbaojimi&env=SUPABASE_URL,SUPABASE_ANON_KEY,PASSWORD,DEFAULT_ACCESS_KEY&envDescription=Supabase%20%E6%95%B0%E6%8D%AE%E5%BA%93%E9%85%8D%E7%BD%AE%E3%80%81%E7%AE%A1%E7%90%86%E5%91%98%E5%AF%86%E7%A0%81%E5%92%8C%E9%BB%98%E8%AE%A4%E8%AE%BF%E9%97%AE%E5%AF%86%E9%92%A5&envLink=https%3A%2F%2Fgithub.com%2Fandclear%2Fbaojimi%23%E7%8E%AF%E5%A2%83%E5%8F%98%E9%87%8F%E9%85%8D%E7%BD%AE&project-name=baojimi&repository-name=baojimi)
 
 ### 部署前的准备工作（不要偷懒）
 
@@ -38,32 +31,19 @@
 3. **获取数据库信息**：在项目设置 → API 页面找到 URL 和 anon key
 4. **执行数据库脚本**：在 SQL Editor 中运行 `database/schema.sql` 的内容
 
-## 🔧 手动部署开发版（给喜欢折腾的人）
+## 🔧 怎么部署
 
-### 1. 克隆项目
+### 1. Fork本项目
 
-```bash
-git clone https://github.com/andclear/baojimi.git
-cd baojimi
-```
+### 2. 打开Vercel
 
-### 2. 安装依赖
+登录后点击"Add New"，选择"Project"，然后选择你Fork的项目，点击Import。
 
-```bash
-npm install
-# 或者用 yarn（如果你喜欢的话）
-yarn install
-```
+
 
 ### 3. 环境变量配置
 
-复制 `.env.local.example` 为 `.env.local`（如果没有就自己创建一个）：
-
-```bash
-cp .env.local.example .env.local
-```
-
-然后编辑 `.env.local` 文件：
+在Environment Variables中添加以下变量：
 
 ```ini
 # Supabase 数据库配置（必填，不填就等着报错吧）
@@ -71,34 +51,17 @@ SUPABASE_URL="你的_supabase_项目_url"
 SUPABASE_ANON_KEY="你的_supabase_anon_key"
 
 # 管理后台密码（必填，建议设置复杂一点）
-PASSWORD="你的超级安全密码"
+PASSWORD="你的管理后台登录密码"
 
-# 默认访问密钥（可选，但建议填写）
-DEFAULT_ACCESS_KEY="sk-你的默认密钥"
-
-# 速率限制配置（可选，有默认值）
-MAX_REQUESTS_PER_MINUTE=30
-MAX_REQUESTS_PER_DAY_PER_IP=2000
-
-# 日志配置（可选）
-MAX_LOG_COUNT=300
 ```
 
 ### 4. 数据库初始化（必要）
 
-在 Supabase 控制台的 SQL Editor 中执行 `database/schema.sql` 中的 SQL 语句。
+确认已经在 Supabase 控制台的 SQL Editor 中执行 `database/schema.sql` 中的 SQL 语句。
 
-### 5. 本地开发
+### 5. 在Vercel部署
 
-```bash
-npm run dev
-```
-
-然后打开 [http://localhost:3000](http://localhost:3000) 看看效果。
-
-（但是网络不行连不上gemini api 一样用不了）
-
-
+然后点击Vercel中点击 Deploy 按钮进行部署。
 
 ## 📖 使用说明
 
