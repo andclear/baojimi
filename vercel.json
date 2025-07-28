@@ -1,4 +1,18 @@
 {
+  "functions": {
+    "pages/api/v1/chat/completions.ts": {
+      "runtime": "@vercel/node@3.0.7"
+    },
+    "pages/api/v1/chat/completions-edge.ts": {
+      "runtime": "@vercel/edge@3.0.7"
+    },
+    "pages/api/v1/models.ts": {
+      "runtime": "@vercel/edge@3.0.7"
+    },
+    "pages/api/admin/settings.ts": {
+      "runtime": "@vercel/node@3.0.7"
+    }
+  },
   "headers": [
     {
       "source": "/api/v1/(.*)",
