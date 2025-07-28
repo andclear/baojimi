@@ -77,7 +77,7 @@ async function handleRealStream(
           
           let accumulatedText = '';
           const streamStartTime = Date.now();
-          const maxStreamDuration = 25000; // 25秒超时保护
+          const maxStreamDuration = 280000; // 280秒超时保护，支持长回复
           
           try {
             for await (const chunk of result.stream) {
