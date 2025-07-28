@@ -92,26 +92,17 @@ async function handleRealStream(
               }
             }
             
-            // 检查是否有内容
-            if (!hasContent || !accumulatedText.trim()) {
-              console.warn(`[EDGE] Key ${keyId}: Empty response from Gemini API`);
-              const fallbackText = "抱歉，我无法生成回复。请稍后再试。";
-              const fallbackChunk = convertGeminiStreamToOpenAI({ text: fallbackText }, model);
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(fallbackChunk)}\n\n`));
-            }
-            
           } catch (streamError) {
             console.error(`[EDGE] Key ${keyId} stream processing error:`, streamError);
-            
-            if (!hasContent) {
-              // 如果还没有任何内容，发送错误信息
-              const errorMessage = "流式传输出现错误，正在尝试其他方式...";
-              const errorChunk = convertGeminiStreamToOpenAI({ text: errorMessage }, model);
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
-            }
-            
-            // 重新抛出错误，让外层处理重试
-            throw streamError;
+            // 不要在这里中断流，让它继续完成
+          }
+          
+          // 检查是否有内容，如果没有内容才发送fallback
+          if (!hasContent || !accumulatedText.trim()) {
+            console.warn(`[EDGE] Key ${keyId}: Empty response from Gemini API`);
+            const fallbackText = "抱歉，我无法生成回复。请稍后再试。";
+            const fallbackChunk = convertGeminiStreamToOpenAI({ text: fallbackText }, model);
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(fallbackChunk)}\n\n`));
           }
           
           if (!streamClosed) {
@@ -217,28 +208,46 @@ async function handleFakeStream(
           // 发送初始连接确认
           controller.enqueue(encoder.encode(': connected\n\n'));
           
-          // 优化分块策略：按词分块而不是按字符，避免截断
-          const words = fullText.split(/(\s+)/); // 保留空格
+          // 改进分块策略：按字符分块，但确保不截断中文字符
+          const chunkSize = Math.max(8, Math.floor(fullText.length / 20)); // 动态分块大小
           let currentIndex = 0;
           
           const sendChunk = () => {
             if (streamClosed) return;
             
-            if (currentIndex < words.length) {
-              // 每次发送 2-4 个词，让流式效果更自然
-              const chunkSize = Math.min(3, words.length - currentIndex);
-              const chunkWords = words.slice(currentIndex, currentIndex + chunkSize);
-              const chunkText = chunkWords.join('');
-              currentIndex += chunkSize;
+            if (currentIndex < fullText.length) {
+              let endIndex = Math.min(currentIndex + chunkSize, fullText.length);
               
-              if (chunkText) {
+              // 确保不在中文字符中间截断
+              if (endIndex < fullText.length) {
+                const char = fullText[endIndex];
+                // 如果是中文字符或其他多字节字符，向前调整到安全位置
+                if (char && char.charCodeAt(0) > 127) {
+                  // 向前找到空格或标点符号
+                  while (endIndex > currentIndex && 
+                         fullText[endIndex] && 
+                         fullText[endIndex].charCodeAt(0) > 127 && 
+                         !/[\s\.,!?;:]/.test(fullText[endIndex])) {
+                    endIndex--;
+                  }
+                  // 如果找到了合适的分割点，向前移动一位包含分隔符
+                  if (endIndex > currentIndex && /[\s\.,!?;:]/.test(fullText[endIndex])) {
+                    endIndex++;
+                  }
+                }
+              }
+              
+              const chunkText = fullText.slice(currentIndex, endIndex);
+              currentIndex = endIndex;
+              
+              if (chunkText.trim()) {
                 const openaiChunk = convertGeminiStreamToOpenAI({ text: chunkText }, model);
                 const sseData = `data: ${JSON.stringify(openaiChunk)}\n\n`;
                 controller.enqueue(encoder.encode(sseData));
               }
               
-              // 动态延迟：较短的文本块延迟更短
-              const delay = Math.max(20, Math.min(50, chunkText.length * 2));
+              // 适当的延迟，确保流式效果但不会太慢
+              const delay = Math.max(80, Math.min(200, chunkText.length * 3));
               setTimeout(sendChunk, delay);
             } else {
               if (!streamClosed) {
