@@ -29,7 +29,7 @@
 
 数据库使用免费的Supabase PostgreSQL。
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fandclear%2Fbaojimi&env=SUPABASE_URL,SUPABASE_ANON_KEY,PASSWORD&envDescription=Supabase%20%E6%95%B0%E6%8D%AE%E5%BA%93%E9%85%8D%E7%BD%AE%E5%92%8C%E7%AE%A1%E7%90%86%E5%91%98%E5%AF%86%E7%A0%81&envLink=https%3A%2F%2Fgithub.com%2Fandclear%2Fbaojimi%23%E7%8E%AF%E5%A2%83%E5%8F%98%E9%87%8F%E9%85%8D%E7%BD%AE&project-name=baojimi&repository-name=baojimi)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fandclear%2Fbaojimi&env=SUPABASE_URL,SUPABASE_ANON_KEY,PASSWORD,DEFAULT_ACCESS_KEY&envDescription=Supabase%20%E6%95%B0%E6%8D%AE%E5%BA%93%E9%85%8D%E7%BD%AE%E3%80%81%E7%AE%A1%E7%90%86%E5%91%98%E5%AF%86%E7%A0%81%E5%92%8C%E9%BB%98%E8%AE%A4%E8%AE%BF%E9%97%AE%E5%AF%86%E9%92%A5&envLink=https%3A%2F%2Fgithub.com%2Fandclear%2Fbaojimi%23%E7%8E%AF%E5%A2%83%E5%8F%98%E9%87%8F%E9%85%8D%E7%BD%AE&project-name=baojimi&repository-name=baojimi)
 
 ### 部署前的准备工作（不要偷懒）
 
