@@ -76,10 +76,18 @@ async function handleRealStream(
           controller.enqueue(encoder.encode(': connected\n\n'));
           
           let accumulatedText = '';
+          const streamStartTime = Date.now();
+          const maxStreamDuration = 25000; // 25秒超时保护
           
           try {
             for await (const chunk of result.stream) {
               if (streamClosed) break;
+              
+              // 检查是否超时
+              if (Date.now() - streamStartTime > maxStreamDuration) {
+                console.warn(`[EDGE] Key ${keyId}: Stream timeout after ${maxStreamDuration}ms`);
+                break;
+              }
               
               const text = chunk.text();
               if (text) {
@@ -203,76 +211,71 @@ async function handleFakeStream(
     let streamClosed = false;
     
     const stream = new ReadableStream({
-      start(controller) {
+      async start(controller) {
         try {
           // 发送初始连接确认
           controller.enqueue(encoder.encode(': connected\n\n'));
           
-          // 改进分块策略：按字符分块，但确保不截断中文字符
-          const chunkSize = Math.max(8, Math.floor(fullText.length / 20)); // 动态分块大小
+          // 简化分块策略：较大的分块，减少网络开销
+          const chunkSize = Math.max(15, Math.floor(fullText.length / 15)); // 更大的分块
           let currentIndex = 0;
           
-          const sendChunk = () => {
-            if (streamClosed) return;
+          // 使用 async/await 而不是 setTimeout，避免 Edge Function 超时问题
+          while (currentIndex < fullText.length && !streamClosed) {
+            let endIndex = Math.min(currentIndex + chunkSize, fullText.length);
             
-            if (currentIndex < fullText.length) {
-              let endIndex = Math.min(currentIndex + chunkSize, fullText.length);
-              
-              // 确保不在中文字符中间截断
-              if (endIndex < fullText.length) {
-                const char = fullText[endIndex];
-                // 如果是中文字符或其他多字节字符，向前调整到安全位置
-                if (char && char.charCodeAt(0) > 127) {
-                  // 向前找到空格或标点符号
-                  while (endIndex > currentIndex && 
-                         fullText[endIndex] && 
-                         fullText[endIndex].charCodeAt(0) > 127 && 
-                         !/[\s\.,!?;:]/.test(fullText[endIndex])) {
-                    endIndex--;
-                  }
-                  // 如果找到了合适的分割点，向前移动一位包含分隔符
-                  if (endIndex > currentIndex && /[\s\.,!?;:]/.test(fullText[endIndex])) {
-                    endIndex++;
-                  }
+            // 确保不在中文字符中间截断
+            if (endIndex < fullText.length) {
+              const char = fullText[endIndex];
+              // 如果是中文字符或其他多字节字符，向前调整到安全位置
+              if (char && char.charCodeAt(0) > 127) {
+                // 向前找到空格或标点符号
+                while (endIndex > currentIndex && 
+                       fullText[endIndex] && 
+                       fullText[endIndex].charCodeAt(0) > 127 && 
+                       !/[\s\.,!?;:]/.test(fullText[endIndex])) {
+                  endIndex--;
+                }
+                // 如果找到了合适的分割点，向前移动一位包含分隔符
+                if (endIndex > currentIndex && /[\s\.,!?;:]/.test(fullText[endIndex])) {
+                  endIndex++;
                 }
               }
-              
-              const chunkText = fullText.slice(currentIndex, endIndex);
-              currentIndex = endIndex;
-              
-              if (chunkText.trim()) {
-                const openaiChunk = convertGeminiStreamToOpenAI({ text: chunkText }, model);
-                const sseData = `data: ${JSON.stringify(openaiChunk)}\n\n`;
-                controller.enqueue(encoder.encode(sseData));
-              }
-              
-              // 适当的延迟，确保流式效果但不会太慢
-              const delay = Math.max(80, Math.min(200, chunkText.length * 3));
-              setTimeout(sendChunk, delay);
-            } else {
-              if (!streamClosed) {
-                // 发送结束标记
-                const finishChunk = {
-                  id: `chatcmpl-${Date.now()}`,
-                  object: 'chat.completion.chunk',
-                  created: Math.floor(Date.now() / 1000),
-                  model,
-                  choices: [{
-                    index: 0,
-                    delta: {},
-                    finish_reason: 'stop'
-                  }]
-                };
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify(finishChunk)}\n\n`));
-                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-                streamClosed = true;
-                controller.close();
-              }
             }
-          };
+            
+            const chunkText = fullText.slice(currentIndex, endIndex);
+            currentIndex = endIndex;
+            
+            if (chunkText.trim()) {
+              const openaiChunk = convertGeminiStreamToOpenAI({ text: chunkText }, model);
+              const sseData = `data: ${JSON.stringify(openaiChunk)}\n\n`;
+              controller.enqueue(encoder.encode(sseData));
+            }
+            
+            // 使用 Promise 而不是 setTimeout，更稳定
+            if (currentIndex < fullText.length) {
+              await new Promise(resolve => setTimeout(resolve, 50)); // 减少延迟
+            }
+          }
           
-          // 稍微延迟开始，模拟真实的响应时间
-          setTimeout(sendChunk, 100);
+          if (!streamClosed) {
+            // 发送结束标记
+            const finishChunk = {
+              id: `chatcmpl-${Date.now()}`,
+              object: 'chat.completion.chunk',
+              created: Math.floor(Date.now() / 1000),
+              model,
+              choices: [{
+                index: 0,
+                delta: {},
+                finish_reason: 'stop'
+              }]
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(finishChunk)}\n\n`));
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            streamClosed = true;
+            controller.close();
+          }
         } catch (error) {
           console.error(`[EDGE] Key ${keyId} fake stream error:`, error);
           if (!streamClosed) {
