@@ -335,7 +335,7 @@ export default async function handler(request: Request): Promise<Response> {
         
         if (isStream && streamingConfig.enabled) {
           // 流式传输模式
-          if (streamingConfig.mode === 'real_stream') {
+          if (streamingConfig.enabled && !streamingConfig.fake_stream_enabled) {
             try {
               result = await handleRealStream(key.id, key.api_key, geminiRequest, model);
             } catch (error) {
@@ -351,6 +351,9 @@ export default async function handler(request: Request): Promise<Response> {
             // 伪装流式传输
             result = await handleFakeStream(key.id, key.api_key, geminiRequest, model);
           }
+        } else if (isStream && streamingConfig.fake_stream_enabled) {
+          // 仅启用伪装流式传输
+          result = await handleFakeStream(key.id, key.api_key, geminiRequest, model);
         } else {
           // 非流式传输
           result = await handleNonStream(key.id, key.api_key, geminiRequest, model);
