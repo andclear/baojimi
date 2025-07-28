@@ -333,29 +333,28 @@ export default async function handler(request: Request): Promise<Response> {
       try {
         let result: Response | any;
         
-        if (isStream && streamingConfig.enabled) {
-          // 流式传输模式
+        if (isStream) {
+          // 客户端请求流式传输
           if (streamingConfig.enabled && !streamingConfig.fake_stream_enabled) {
-            try {
-              result = await handleRealStream(key.id, key.api_key, geminiRequest, model);
-            } catch (error) {
-              // 如果真实流式传输失败且启用了伪装流式，则降级
-              if (streamingConfig.fake_stream_enabled) {
-                console.log(`[EDGE] Real stream failed for key ${key.id}, falling back to fake stream`);
-                result = await handleFakeStream(key.id, key.api_key, geminiRequest, model);
-              } else {
-                throw error;
-              }
-            }
-          } else {
-            // 伪装流式传输
+            // 真实流式传输模式
+            console.log(`[EDGE] Using real stream mode for key ${key.id}`);
+            result = await handleRealStream(key.id, key.api_key, geminiRequest, model);
+          } else if (!streamingConfig.enabled && streamingConfig.fake_stream_enabled) {
+            // 伪装流式传输模式
+            console.log(`[EDGE] Using fake stream mode for key ${key.id}`);
             result = await handleFakeStream(key.id, key.api_key, geminiRequest, model);
+          } else if (!streamingConfig.enabled && !streamingConfig.fake_stream_enabled) {
+            // 流式传输被禁用，降级到非流式
+            console.log(`[EDGE] Stream disabled, using non-stream mode for key ${key.id}`);
+            result = await handleNonStream(key.id, key.api_key, geminiRequest, model);
+          } else {
+            // 配置冲突（两者都启用），优先使用真实流式
+            console.log(`[EDGE] Config conflict detected, defaulting to real stream for key ${key.id}`);
+            result = await handleRealStream(key.id, key.api_key, geminiRequest, model);
           }
-        } else if (isStream && streamingConfig.fake_stream_enabled) {
-          // 仅启用伪装流式传输
-          result = await handleFakeStream(key.id, key.api_key, geminiRequest, model);
         } else {
-          // 非流式传输
+          // 客户端请求非流式传输
+          console.log(`[EDGE] Using non-stream mode for key ${key.id}`);
           result = await handleNonStream(key.id, key.api_key, geminiRequest, model);
         }
         
