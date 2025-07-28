@@ -1,0 +1,35 @@
+{
+  "functions": {
+    "pages/api/v1/chat/completions.ts": {
+      "runtime": "nodejs18.x"
+    },
+    "pages/api/v1/chat/completions-edge.ts": {
+      "runtime": "edge"
+    },
+    "pages/api/v1/models.ts": {
+      "runtime": "edge"
+    },
+    "pages/api/admin/settings.ts": {
+      "runtime": "nodejs18.x"
+    }
+  },
+  "headers": [
+    {
+      "source": "/api/v1/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, PUT, DELETE, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization"
+        }
+      ]
+    }
+  ]
+}
