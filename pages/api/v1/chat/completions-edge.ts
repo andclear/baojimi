@@ -66,101 +66,61 @@ async function handleRealStream(
     const result = await geminiModel.generateContentStream(geminiRequest);
     
     const encoder = new TextEncoder();
-    let hasContent = false;
-    let streamClosed = false;
-    
     const stream = new ReadableStream({
       async start(controller) {
         try {
           // 发送初始连接确认
           controller.enqueue(encoder.encode(': connected\n\n'));
           
-          let accumulatedText = '';
-          const streamStartTime = Date.now();
-          const maxStreamDuration = 280000; // 280秒超时保护，支持长回复
-          
           try {
             for await (const chunk of result.stream) {
-              if (streamClosed) break;
-              
-              // 检查是否超时
-              if (Date.now() - streamStartTime > maxStreamDuration) {
-                console.warn(`[EDGE] Key ${keyId}: Stream timeout after ${maxStreamDuration}ms`);
-                break;
-              }
-              
               const text = chunk.text();
               if (text) {
-                hasContent = true;
-                accumulatedText += text;
-                
                 const openaiChunk = convertGeminiStreamToOpenAI({ text }, model);
                 const sseData = `data: ${JSON.stringify(openaiChunk)}\n\n`;
                 controller.enqueue(encoder.encode(sseData));
               }
             }
-            
           } catch (streamError) {
-            console.error(`[EDGE] Key ${keyId} stream processing error:`, streamError);
-            // 不要在这里中断流，让它继续完成
+            console.error('Stream processing error:', streamError);
+            // 流处理错误，但不中断连接，发送错误信息
+            const errorMessage = (streamError as any)?.message || 'Stream processing error';
+            const errorChunk = convertGeminiStreamToOpenAI({ text: `\n\n[Error: ${errorMessage}]` }, model);
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
           }
           
-          // 检查是否有内容，如果没有内容才发送fallback
-          if (!hasContent || !accumulatedText.trim()) {
-            console.warn(`[EDGE] Key ${keyId}: Empty response from Gemini API`);
-            const fallbackText = "抱歉，我无法生成回复。请稍后再试。";
-            const fallbackChunk = convertGeminiStreamToOpenAI({ text: fallbackText }, model);
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(fallbackChunk)}\n\n`));
-          }
-          
-          if (!streamClosed) {
-            // 发送结束标记
-            const finishChunk = {
-              id: `chatcmpl-${Date.now()}`,
-              object: 'chat.completion.chunk',
-              created: Math.floor(Date.now() / 1000),
-              model,
-              choices: [{
-                index: 0,
-                delta: {},
-                finish_reason: 'stop'
-              }]
-            };
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(finishChunk)}\n\n`));
-            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-            streamClosed = true;
-            controller.close();
-          }
+          // 发送结束标记
+          const finishChunk = {
+            id: `chatcmpl-${Date.now()}`,
+            object: 'chat.completion.chunk',
+            created: Math.floor(Date.now() / 1000),
+            model,
+            choices: [{
+              index: 0,
+              delta: {},
+              finish_reason: 'stop'
+            }]
+          };
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(finishChunk)}\n\n`));
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
         } catch (error) {
-          console.error(`[EDGE] Key ${keyId} stream error:`, error);
-          
-          if (!streamClosed) {
-            try {
-              const errorChunk = {
-                id: `chatcmpl-${Date.now()}`,
-                object: 'chat.completion.chunk',
-                created: Math.floor(Date.now() / 1000),
-                model,
-                choices: [{
-                  index: 0,
-                  delta: {},
-                  finish_reason: 'error'
-                }]
-              };
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
-              controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-              streamClosed = true;
-            } catch (e) {
-              console.error(`[EDGE] Key ${keyId} failed to send error chunk:`, e);
-            }
-            controller.error(error);
-          }
+          console.error('Stream error:', error);
+          const errorChunk = {
+            id: `chatcmpl-${Date.now()}`,
+            object: 'chat.completion.chunk',
+            created: Math.floor(Date.now() / 1000),
+            model,
+            choices: [{
+              index: 0,
+              delta: {},
+              finish_reason: 'error'
+            }]
+          };
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.error(error);
         }
-      },
-      
-      cancel() {
-        streamClosed = true;
-        console.log(`[EDGE] Key ${keyId} stream cancelled by client`);
       }
     });
     
@@ -176,7 +136,7 @@ async function handleRealStream(
       },
     });
   } catch (error) {
-    console.error(`[EDGE] Real stream failed for key ${keyId}:`, error);
+    console.error(`Real stream failed for key ${keyId}:`, error);
     throw error;
   }
 }
@@ -200,65 +160,31 @@ async function handleFakeStream(
     const response = await result.response;
     const fullText = response.text();
     
-    // 检查响应是否为空
-    if (!fullText || !fullText.trim()) {
-      console.warn(`[EDGE] Key ${keyId}: Empty response from Gemini API in fake stream`);
-      throw new Error('Empty response from Gemini API');
-    }
-    
     // 将完整文本分块模拟流式传输
     const encoder = new TextEncoder();
-    let streamClosed = false;
-    
     const stream = new ReadableStream({
-      async start(controller) {
-        try {
-          // 发送初始连接确认
-          controller.enqueue(encoder.encode(': connected\n\n'));
-          
-          // 简化分块策略：较大的分块，减少网络开销
-          const chunkSize = Math.max(15, Math.floor(fullText.length / 15)); // 更大的分块
-          let currentIndex = 0;
-          
-          // 使用 async/await 而不是 setTimeout，避免 Edge Function 超时问题
-          while (currentIndex < fullText.length && !streamClosed) {
-            let endIndex = Math.min(currentIndex + chunkSize, fullText.length);
+      start(controller) {
+        // 发送初始连接确认
+        controller.enqueue(encoder.encode(': connected\n\n'));
+        
+        // 按字符分块，而不是按词分块，这样更平滑
+        const chunkSize = 3; // 每次发送3个字符
+        let currentIndex = 0;
+        
+        const sendChunk = () => {
+          if (currentIndex < fullText.length) {
+            const chunkText = fullText.slice(currentIndex, currentIndex + chunkSize);
+            currentIndex += chunkSize;
             
-            // 确保不在中文字符中间截断
-            if (endIndex < fullText.length) {
-              const char = fullText[endIndex];
-              // 如果是中文字符或其他多字节字符，向前调整到安全位置
-              if (char && char.charCodeAt(0) > 127) {
-                // 向前找到空格或标点符号
-                while (endIndex > currentIndex && 
-                       fullText[endIndex] && 
-                       fullText[endIndex].charCodeAt(0) > 127 && 
-                       !/[\s\.,!?;:]/.test(fullText[endIndex])) {
-                  endIndex--;
-                }
-                // 如果找到了合适的分割点，向前移动一位包含分隔符
-                if (endIndex > currentIndex && /[\s\.,!?;:]/.test(fullText[endIndex])) {
-                  endIndex++;
-                }
-              }
-            }
-            
-            const chunkText = fullText.slice(currentIndex, endIndex);
-            currentIndex = endIndex;
-            
-            if (chunkText.trim()) {
+            if (chunkText) {
               const openaiChunk = convertGeminiStreamToOpenAI({ text: chunkText }, model);
               const sseData = `data: ${JSON.stringify(openaiChunk)}\n\n`;
               controller.enqueue(encoder.encode(sseData));
             }
             
-            // 使用 Promise 而不是 setTimeout，更稳定
-            if (currentIndex < fullText.length) {
-              await new Promise(resolve => setTimeout(resolve, 50)); // 减少延迟
-            }
-          }
-          
-          if (!streamClosed) {
+            // 模拟延迟，让流式效果更自然
+            setTimeout(sendChunk, 30);
+          } else {
             // 发送结束标记
             const finishChunk = {
               id: `chatcmpl-${Date.now()}`,
@@ -273,38 +199,12 @@ async function handleFakeStream(
             };
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(finishChunk)}\n\n`));
             controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-            streamClosed = true;
             controller.close();
           }
-        } catch (error) {
-          console.error(`[EDGE] Key ${keyId} fake stream error:`, error);
-          if (!streamClosed) {
-            try {
-              const errorChunk = {
-                id: `chatcmpl-${Date.now()}`,
-                object: 'chat.completion.chunk',
-                created: Math.floor(Date.now() / 1000),
-                model,
-                choices: [{
-                  index: 0,
-                  delta: {},
-                  finish_reason: 'error'
-                }]
-              };
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
-              controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-              streamClosed = true;
-            } catch (e) {
-              console.error(`[EDGE] Key ${keyId} failed to send error chunk in fake stream:`, e);
-            }
-            controller.error(error);
-          }
-        }
-      },
-      
-      cancel() {
-        streamClosed = true;
-        console.log(`[EDGE] Key ${keyId} fake stream cancelled by client`);
+        };
+        
+        // 稍微延迟开始，模拟真实的响应时间
+        setTimeout(sendChunk, 100);
       }
     });
     
@@ -320,7 +220,7 @@ async function handleFakeStream(
       },
     });
   } catch (error) {
-    console.error(`[EDGE] Fake stream failed for key ${keyId}:`, error);
+    console.error(`Fake stream failed for key ${keyId}:`, error);
     throw error;
   }
 }
@@ -343,12 +243,6 @@ async function handleNonStream(
     const response = await result.response;
     const text = response.text();
     
-    // 检查响应是否为空
-    if (!text || !text.trim()) {
-      console.warn(`[EDGE] Key ${keyId}: Empty response from Gemini API in non-stream`);
-      throw new Error('Empty response from Gemini API');
-    }
-    
     return {
       id: `chatcmpl-${Date.now()}`,
       object: 'chat.completion',
@@ -369,7 +263,7 @@ async function handleNonStream(
       }
     };
   } catch (error) {
-    console.error(`[EDGE] Non-stream failed for key ${keyId}:`, error);
+    console.error(`Non-stream failed for key ${keyId}:`, error);
     throw error;
   }
 }
@@ -418,36 +312,15 @@ export default async function handler(request: Request): Promise<Response> {
     const availableKeys = await getAllAvailableGeminiKeys();
     console.log(`[EDGE] Starting with ${availableKeys.length} available keys`);
     
-    // 添加请求去重：为相同的请求内容添加随机性
     const model = requestBody.model || 'gemini-pro';
     const isStream = requestBody.stream || false;
-    
-    // 为请求添加时间戳和随机性，避免完全相同的请求
-    const originalMessages = requestBody.messages || [];
-    const enhancedMessages = [...originalMessages];
-    
-    // 在系统消息中添加微小的时间戳差异，避免缓存重复
-    if (enhancedMessages.length > 0) {
-      const lastMessage = enhancedMessages[enhancedMessages.length - 1];
-      if (lastMessage.role === 'user') {
-        // 在用户消息末尾添加不可见的时间戳
-        lastMessage.content += `\n<!-- req_${Date.now()}_${Math.random().toString(36).substr(2, 9)} -->`;
-      }
-    }
-    
-    const geminiRequest = await convertOpenAItoGemini({
-      ...requestBody,
-      messages: enhancedMessages
-    });
+    const geminiRequest = await convertOpenAItoGemini(requestBody);
     
     let lastError: any = null;
     let triedKeys: string[] = [];
     
-    // 随机打乱 keys 顺序，避免总是使用相同的 key
-    const shuffledKeys = [...availableKeys].sort(() => Math.random() - 0.5);
-    
     // 轮询所有可用的key
-    for (const key of shuffledKeys) {
+    for (const key of availableKeys) {
       const keyStartTime = Date.now();
       triedKeys.push(key.id);
       geminiKeyId = key.id;
@@ -488,7 +361,7 @@ export default async function handler(request: Request): Promise<Response> {
         const keyDuration = Date.now() - keyStartTime;
         
         // 成功！记录成功日志
-        console.log(`[EDGE] Key ${key.id} succeeded in ${keyDuration}ms!`);
+        console.log(`[EDGE] Key ${key.id} succeeded!`);
         
         // 记录成功的API调用日志
         logApiCall({
@@ -559,8 +432,7 @@ export default async function handler(request: Request): Promise<Response> {
     }
     
     // 所有key都失败了
-    const totalDuration = Date.now() - startTime;
-    console.log(`[EDGE] All ${triedKeys.length} keys failed in ${totalDuration}ms. Last error:`, lastError);
+    console.log(`[EDGE] All ${triedKeys.length} keys failed. Last error:`, lastError);
     
     let apiError: ApiError;
     if (lastError instanceof ApiError) {
@@ -572,8 +444,6 @@ export default async function handler(request: Request): Promise<Response> {
         apiError = new ApiError(429, 'All API keys have exceeded quota limits');
       } else if (errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('Invalid API key')) {
         apiError = new ApiError(401, 'All API keys are invalid');
-      } else if (errorMsg.includes('Empty response')) {
-        apiError = new ApiError(502, 'All API keys returned empty responses');
       } else {
         apiError = new ApiError(503, `All ${triedKeys.length} API keys failed. Last error: ${errorMsg}`);
       }
@@ -590,7 +460,7 @@ export default async function handler(request: Request): Promise<Response> {
     });
     
   } catch (error) {
-    console.error('[EDGE] API Error:', error);
+    console.error('Edge API Error:', error);
     
     let apiError: ApiError;
     if (error instanceof ApiError) {
