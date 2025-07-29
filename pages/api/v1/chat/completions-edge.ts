@@ -142,7 +142,6 @@ async function handleRealStream(
 }
 
 // 伪装流式传输实现
-// 后端使用流式接收数据，但一次性返回完整结果给前端
 async function handleFakeStream(
   keyId: string,
   apiKey: string,
@@ -156,105 +155,68 @@ async function handleFakeStream(
       safetySettings: SAFETY_SETTINGS
     });
     
-    console.log(`[FAKE_STREAM] Key ${keyId} starting fake stream mode...`);
+    // 先完整获取响应
+    const result = await geminiModel.generateContent(geminiRequest);
+    const response = await result.response;
+    const fullText = response.text();
     
-    // 创建响应流，立即返回给 Vercel
+    // 将完整文本分块模拟流式传输
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
-      async start(controller) {
-        try {
-          console.log(`[FAKE_STREAM] Key ${keyId} created response stream, starting internal stream processing...`);
-          
-          // 在后端内部使用流式方式调用 Gemini API
-          const result = await geminiModel.generateContentStream(geminiRequest);
-          
-          // 在后端拼接所有数据块，不立即发送给前端
-          let fullText = '';
-          let chunkCount = 0;
-          
-          console.log(`[FAKE_STREAM] Key ${keyId} receiving stream chunks from Gemini...`);
-          
-          // 接收并拼接所有流式数据块
-          for await (const chunk of result.stream) {
-            const text = chunk.text();
-            if (text) {
-              fullText += text;
-              chunkCount++;
-              
-              // 每10个块输出一次进度日志
-              if (chunkCount % 10 === 0) {
-                console.log(`[FAKE_STREAM] Key ${keyId} received ${chunkCount} chunks, current length: ${fullText.length}`);
-              }
+      start(controller) {
+        // 发送初始连接确认
+        controller.enqueue(encoder.encode(': connected\n\n'));
+        
+        // 按字符分块，而不是按词分块，这样更平滑
+        const chunkSize = 3; // 每次发送3个字符
+        let currentIndex = 0;
+        
+        const sendChunk = () => {
+          if (currentIndex < fullText.length) {
+            const chunkText = fullText.slice(currentIndex, currentIndex + chunkSize);
+            currentIndex += chunkSize;
+            
+            if (chunkText) {
+              const openaiChunk = convertGeminiStreamToOpenAI({ text: chunkText }, model);
+              const sseData = `data: ${JSON.stringify(openaiChunk)}\n\n`;
+              controller.enqueue(encoder.encode(sseData));
             }
+            
+            // 模拟延迟，让流式效果更自然
+            setTimeout(sendChunk, 30);
+          } else {
+            // 发送结束标记
+            const finishChunk = {
+              id: `chatcmpl-${Date.now()}`,
+              object: 'chat.completion.chunk',
+              created: Math.floor(Date.now() / 1000),
+              model,
+              choices: [{
+                index: 0,
+                delta: {},
+                finish_reason: 'stop'
+              }]
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(finishChunk)}\n\n`));
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
           }
-          
-          console.log(`[FAKE_STREAM] Key ${keyId} completed stream reception. Total chunks: ${chunkCount}, final length: ${fullText.length}`);
-          
-          // 检查响应是否为空
-          if (!fullText || fullText.trim().length === 0) {
-            console.warn(`[FAKE_STREAM] Key ${keyId} returned empty response after stream processing`);
-            throw new Error('Empty response from Gemini API');
-          }
-          
-          // 创建完整的 OpenAI 格式响应
-          const completeResponse = {
-            id: `chatcmpl-${Date.now()}`,
-            object: 'chat.completion',
-            created: Math.floor(Date.now() / 1000),
-            model,
-            choices: [{
-              index: 0,
-              message: {
-                role: 'assistant',
-                content: fullText
-              },
-              finish_reason: 'stop'
-            }],
-            usage: {
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0
-            }
-          };
-          
-          // 一次性将完整的拼接好的字符串推入响应流
-          console.log(`[FAKE_STREAM] Key ${keyId} pushing complete response to stream...`);
-          const responseData = JSON.stringify(completeResponse);
-          controller.enqueue(encoder.encode(responseData));
-          controller.close();
-          
-          console.log(`[FAKE_STREAM] Key ${keyId} fake stream completed successfully`);
-          
-        } catch (error) {
-          console.error(`[FAKE_STREAM] Error in fake stream for key ${keyId}:`, error);
-          
-          // 发送错误响应
-          const errorResponse = {
-            error: {
-              message: (error as any)?.message || 'Internal server error',
-              type: 'api_error',
-              code: 'internal_error'
-            }
-          };
-          
-          controller.enqueue(encoder.encode(JSON.stringify(errorResponse)));
-          controller.error(error);
-        }
-      },
-      
-      cancel() {
-        console.log(`[FAKE_STREAM] Stream cancelled for key ${keyId}`);
+        };
+        
+        // 稍微延迟开始，模拟真实的响应时间
+        setTimeout(sendChunk, 100);
       }
     });
     
-    // 返回 JSON 响应流，而不是 SSE 流
     return new Response(stream, {
       headers: {
-        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Connection': 'keep-alive',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'X-Accel-Buffering': 'no',
       },
     });
   } catch (error) {
